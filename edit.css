@@ -178,7 +178,9 @@ select.fld { padding: 0; }
 @media (max-width: 720px) {
   :root { --top-h: 52px; }
   .back span { display: none; }
-  .zoom { display: none; }
+  .zoom { position: fixed; right: 12px; bottom: calc(env(safe-area-inset-bottom) + 86px); flex-direction: column; gap: 6px; z-index: 6; }
+  .zoom .ibtn { width: 40px; height: 40px; background: var(--panel-2); box-shadow: 0 4px 14px rgba(0,0,0,.4); }
+  .zval { display: none; }
   #undoBtn { width: 32px; height: 32px; }
   .top-actions .btn { padding: 7px 10px; font-size: 13px; }
   .tools { order: 5; border-top: 1px solid var(--line); border-bottom: 0; padding-bottom: calc(6px + env(safe-area-inset-bottom)); }
