@@ -791,7 +791,7 @@ async function save() {
     const emb = {};
     const font = async (fam, b, i) => {
       const k = fontKey(fam, b, i);
-      if (!emb[k]) emb[k] = doc.embedFont((await loadFont(fam, b, i)).bytes, { subset: true });
+      if (!emb[k]) emb[k] = doc.embedFont((await loadFont(fam, b, i)).bytes, { subset: false });
       return emb[k];
     };
     const baseOf = async (it) => (await loadFont(it.fam, it.bold, it.italic)).baseline;
