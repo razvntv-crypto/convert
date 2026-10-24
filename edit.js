@@ -448,13 +448,20 @@ function sampleColors(pg, x, y, w, h) {
   const sorted = [...hist.entries()].sort((a, b) => b[1] - a[1]);
   const bg = toRGB(sorted[0][0]);
   const lum = (c) => 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2];
+  // text colour: among the frequent colours that contrast with the background, take the most contrasting
+  // (anti-aliased edges are frequent but sit between text and background)
   let fg = null;
-  for (const [key] of sorted) { const c2 = toRGB(key); if (Math.abs(lum(c2) - lum(bg)) > 90) { fg = c2; break; } }
+  const cand = sorted.map(([key, n]) => [toRGB(key), n]).filter(([c2]) => Math.abs(lum(c2) - lum(bg)) > 60);
+  if (cand.length) {
+    const maxN = cand[0][1];
+    const pool = cand.filter(([, n]) => n >= Math.max(2, maxN * 0.15));
+    fg = pool.reduce((a, b) => (Math.abs(lum(b[0]) - lum(bg)) > Math.abs(lum(a[0]) - lum(bg)) ? b : a))[0];
+  }
   if (!fg) fg = lum(bg) > 128 ? [17, 17, 17] : [240, 240, 240];
   const hex = (c) => '#' + c.map((v) => Math.min(255, v).toString(16).padStart(2, '0')).join('');
   // snap near-white / near-black
   const bgHex = lum(bg) > 245 ? '#ffffff' : hex(bg);
-  const fgHex = lum(fg) < 40 ? '#000000' : hex(fg);
+  const fgHex = lum(fg) < 60 && Math.max(...fg) - Math.min(...fg) < 30 ? '#000000' : hex(fg);
   return { bg: bgHex, fg: fgHex };
 }
 const sampleBg = (pg, x, y, w, h) => sampleColors(pg, x, y, w, h).bg;
@@ -891,6 +898,10 @@ async function save() {
       copied.forEach((pp) => fin.addPage(pp));
       out = await fin.save();
     } else out = await doc.save();
+    if ($('#flatOn').checked) {
+      const touched = live.map((i, k) => (S.pages[i].items.some((it) => it.type === 'edit' || (it.type === 'rect' && !it.hl)) ? k : -1)).filter((k) => k >= 0);
+      if (touched.length) out = await flattenPages(out, touched);
+    }
     S.dirty = false;
     showResult(new Blob([out], { type: 'application/pdf' }), S.file.name.replace(/\.pdf$/i, '') + '-editat.pdf');
   } catch (e) {
@@ -899,6 +910,32 @@ async function save() {
   } finally { busy.remove(); }
 }
 $('#saveBtn').onclick = save;
+
+// rasterise selected pages so covered text is really gone
+async function flattenPages(bytes, idxs) {
+  const pdfjs = await lib.pdfjs();
+  const { PDFDocument, degrees } = await lib.pdflib();
+  const src = await PDFDocument.load(bytes, { ignoreEncryption: true });
+  const view = await pdfjs.getDocument({ data: bytes.slice(), isEvalSupported: false }).promise;
+  const out = await PDFDocument.create();
+  const n = src.getPageCount();
+  for (let k = 0; k < n; k++) {
+    if (!idxs.includes(k)) { const [p] = await out.copyPages(src, [k]); out.addPage(p); continue; }
+    const page = await view.getPage(k + 1);
+    const vp0 = page.getViewport({ scale: 1, rotation: 0 });
+    const vp = page.getViewport({ scale: 2.5, rotation: 0 });
+    const c = document.createElement('canvas'); c.width = Math.floor(vp.width); c.height = Math.floor(vp.height);
+    const ctx = c.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height);
+    await page.render({ canvasContext: ctx, viewport: vp, annotationMode: 0 }).promise;
+    const jpg = await out.embedJpg(await (await new Promise((r) => c.toBlob(r, 'image/jpeg', 0.9))).arrayBuffer());
+    const p = out.addPage([vp0.width, vp0.height]);
+    p.drawImage(jpg, { x: 0, y: 0, width: vp0.width, height: vp0.height });
+    if (page.rotate) p.setRotation(degrees(page.rotate));
+    c.width = c.height = 0;
+  }
+  view.destroy();
+  return out.save();
+}
 
 function showResult(blob, name) {
   const box = $('#result'); box.innerHTML = '';

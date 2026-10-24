@@ -5,6 +5,7 @@
   --top-h: 56px; --tools-h: 58px;
   color-scheme: dark;
 }
+[hidden] { display: none !important; }
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 14px/1.4 var(--sans); overscroll-behavior: none; -webkit-text-size-adjust: 100%; }
 body { display: flex; flex-direction: column; overflow: hidden; }
