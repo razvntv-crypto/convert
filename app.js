@@ -13,7 +13,7 @@ const cache = {};
 const once = (k, fn) => (cache[k] ??= fn().catch((e) => { delete cache[k]; throw e; }));
 const loadScript = (src) => new Promise((res, rej) => {
   const s = document.createElement('script');
-  s.src = src; s.onload = res; s.onerror = () => rej(new Error('Nu s-a putut încărca ' + src.split('/').slice(-1)[0] + ' (ești offline?)'));
+  s.src = src; s.onload = res; s.onerror = () => rej(new Error('Nu s-a putut încărca o librărie (ești offline la prima folosire?)'));
   document.head.appendChild(s);
 });
 const imp = (url) => import(url).catch(() => { throw new Error('Nu s-a putut încărca o librărie (ești offline la prima folosire?)'); });
@@ -24,12 +24,16 @@ const lib = {
     return m;
   }),
   jsPDF: () => once('jspdf', async () => { const m = await imp(CDN + 'jspdf@2.5.2/+esm'); return m.jsPDF || m.default.jsPDF || m.default; }),
+  pdflib: () => once('pdflib', () => imp(CDN + 'pdf-lib@1.17.1/+esm')),
   docx: () => once('docx', () => imp(CDN + 'docx@9/+esm')),
   docxPreview: () => once('docxPreview', () => imp(CDN + 'docx-preview@0.3/+esm')),
   html2canvas: () => once('h2c', async () => (await imp(CDN + 'html2canvas@1.4.1/+esm')).default),
   mammoth: () => once('mammoth', async () => { await loadScript(CDN + 'mammoth@1/mammoth.browser.min.js'); return window.mammoth; }),
   heic2any: () => once('heic', async () => { await loadScript(CDN + 'heic2any@0.0.4/dist/heic2any.min.js'); return window.heic2any; }),
   JSZip: () => once('jszip', async () => (await imp(CDN + 'jszip@3.10.1/+esm')).default),
+  XLSX: () => once('xlsx', async () => { await loadScript(CDN + 'xlsx@0.18.5/dist/xlsx.full.min.js'); return window.XLSX; }),
+  pptx: () => once('pptx', async () => { await loadScript(CDN + 'pptxgenjs@3.12.0/dist/pptxgen.bundle.js'); return window.PptxGenJS; }),
+  tesseract: () => once('tess', async () => { await loadScript(CDN + 'tesseract.js@5/dist/tesseract.min.js'); return window.Tesseract; }),
 };
 
 /* ---------------- ffmpeg (own worker around the core) ---------------- */
@@ -87,12 +91,43 @@ class FF {
     const { logs } = await this.exec(['-hide_banner', '-i', path]);
     const all = logs.join('\n');
     const d = /Duration:\s*(\d+):(\d+):([\d.]+)/.exec(all);
-    const v = /Stream #[^\n]*?: Video: (\w+)/.exec(all);
+    const vLine = /Stream #[^\n]*?: Video: [^\n]*/.exec(all)?.[0] || '';
+    const v = /Video: (\w+)/.exec(vLine);
     const a = /Stream #[^\n]*?: Audio: (\w+)/.exec(all);
-    return { duration: d ? +d[1] * 3600 + +d[2] * 60 + +d[3] : 0, v: v?.[1] || null, a: a?.[1] || null, logs: all };
+    const dim = /, (\d{2,5})x(\d{2,5})/.exec(vLine);
+    const rot = /rotate\s*:\s*-?(90|270)|rotation of -?(90|270)/.test(all);
+    let h = dim ? +dim[2] : 0, w = dim ? +dim[1] : 0;
+    if (rot) [w, h] = [h, w];
+    return { duration: d ? +d[1] * 3600 + +d[2] * 60 + +d[3] : 0, v: v?.[1] || null, a: a?.[1] || null, w, h };
   }
 }
 const ff = new FF();
+
+/* ---------------- OCR ---------------- */
+let ocrWorker = null, ocrProgress = null;
+async function getOcr(job) {
+  if (ocrWorker) return ocrWorker;
+  job?.say('Pornesc OCR-ul (prima dată ~15 MB)…', true);
+  const T = await lib.tesseract();
+  try {
+    ocrWorker = await T.createWorker(['ron', 'eng'], 1, {
+      logger: (m) => { if (m.status === 'recognizing text') ocrProgress?.(m.progress); },
+    });
+  } catch (e) { ocrWorker = null; throw new Error('Nu s-a putut porni OCR-ul (ești offline la prima folosire?)'); }
+  return ocrWorker;
+}
+async function ocrText(input, job, label) {
+  const w = await getOcr(job);
+  job?.say(label || 'Citesc textul (OCR)…');
+  ocrProgress = (p) => job?.progress(p);
+  try { const { data } = await w.recognize(input); return data.text || ''; }
+  finally { ocrProgress = null; }
+}
+function ocrParas(text) {
+  return text.split(/\n\s*\n/).map((p) => p.split('\n').map((l) => l.trim()).filter(Boolean)
+    .reduce((acc, l) => (/[-‐]$/.test(acc) && /^[a-zăâîșț]/.test(l) ? acc.replace(/[-‐]$/, '') + l : acc ? acc + ' ' + l : l), ''))
+    .filter((p) => p.trim());
+}
 
 /* ---------------- formats ---------------- */
 const EXT = {
@@ -101,27 +136,35 @@ const EXT = {
   audio: ['mp3', 'wav', 'm4a', 'aac', 'ogg', 'oga', 'opus', 'flac', 'wma', 'aiff', 'aif', 'amr'],
   pdf: ['pdf'],
   docx: ['docx', 'doc', 'odt', 'rtf'],
-  text: ['txt', 'md', 'csv', 'log'],
+  sheet: ['xlsx', 'xls', 'xlsm', 'ods', 'csv'],
+  text: ['txt', 'md', 'log'],
 };
 const TARGETS = {
-  image: ['jpg', 'png', 'webp', 'pdf'],
-  video: ['mp4', 'mov', 'mkv', 'webm', 'avi', 'gif', 'mp3', 'wav', 'm4a'],
+  image: ['jpg', 'png', 'webp', 'pdf', 'small', 'docx', 'txt'],
+  video: ['mp4', 'small', 'mov', 'mkv', 'webm', 'avi', 'gif', 'mp3', 'wav', 'm4a'],
   audio: ['mp3', 'wav', 'm4a', 'ogg', 'flac'],
-  pdf: ['docx', 'jpg', 'png', 'txt'],
+  pdf: ['docx', 'jpg', 'png', 'txt', 'pptx', 'ocr', 'small', 'merge', 'split'],
+  sheet: ['pdf', 'xlsx', 'csv'],
   docx: ['pdf', 'txt'],
   text: ['pdf', 'docx'],
 };
+const LABELS = { small: 'COMPRIMĂ', ocr: 'PDF CĂUTABIL', merge: 'UNEȘTE', split: 'SEPARĂ PAGINI' };
+const TIPS = {
+  small: 'Același format, fișier mai mic', ocr: 'OCR: PDF scanat → text selectabil și căutabil',
+  merge: 'Unește toate PDF-urile cu „UNEȘTE” într-unul singur, în ordinea din listă', split: 'Fiecare pagină devine un PDF separat',
+};
+const labelFor = (job, t) => (job?.kind === 'image' && (t === 'docx' || t === 'txt') ? `${t.toUpperCase()} · OCR` : LABELS[t] || t.toUpperCase());
 const DEFAULTS = {
   heic: 'jpg', heif: 'jpg', webp: 'jpg', avif: 'jpg', png: 'jpg', jpg: 'png', jpeg: 'png', jfif: 'jpg', bmp: 'png', tif: 'jpg', tiff: 'jpg', svg: 'png',
   mov: 'mp4', mkv: 'mp4', avi: 'mp4', wmv: 'mp4', flv: 'mp4', '3gp': 'mp4', m4v: 'mp4', webm: 'mp4', mpg: 'mp4', mpeg: 'mp4', ts: 'mp4', mts: 'mp4', m2ts: 'mp4', ogv: 'mp4',
   wav: 'mp3', flac: 'mp3', m4a: 'mp3', aac: 'mp3', ogg: 'mp3', oga: 'mp3', opus: 'mp3', wma: 'mp3', aiff: 'mp3', aif: 'mp3', amr: 'mp3',
-  pdf: 'docx', docx: 'pdf', txt: 'pdf', md: 'pdf',
+  pdf: 'docx', docx: 'pdf', txt: 'pdf', md: 'pdf', xlsx: 'pdf', xls: 'pdf', xlsm: 'pdf', ods: 'pdf', csv: 'xlsx',
 };
 const MIME = {
   jpg: 'image/jpeg', png: 'image/png', webp: 'image/webp', gif: 'image/gif', pdf: 'application/pdf',
   mp4: 'video/mp4', mov: 'video/quicktime', mkv: 'video/x-matroska', webm: 'video/webm', avi: 'video/x-msvideo',
   mp3: 'audio/mpeg', wav: 'audio/wav', m4a: 'audio/mp4', ogg: 'audio/ogg', flac: 'audio/flac',
-  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', txt: 'text/plain;charset=utf-8', zip: 'application/zip',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', txt: 'text/plain;charset=utf-8', csv: 'text/csv;charset=utf-8', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation', zip: 'application/zip',
 };
 function kindOf(file) {
   const ext = (file.name.split('.').pop() || '').toLowerCase();
@@ -130,6 +173,7 @@ function kindOf(file) {
   if (t.startsWith('image/')) return { kind: 'image', ext: t.split('/')[1] };
   if (t.startsWith('video/')) return { kind: 'video', ext: t.split('/')[1] };
   if (t.startsWith('audio/')) return { kind: 'audio', ext: t.split('/')[1] };
+  if (t === 'application/pdf') return { kind: 'pdf', ext: 'pdf' };
   if (t.startsWith('text/')) return { kind: 'text', ext: 'txt' };
   return { kind: null, ext };
 }
@@ -142,14 +186,15 @@ function targetsFor(job) {
 
 /* ---------------- options ---------------- */
 const opts = {
-  quality: 90, videoQ: '23', dpi: '2.5', gifW: '480', gifFps: '15', forceH264: false, mergePdf: true,
+  quality: 90, videoQ: '23', dpi: '2.5', gifW: '480', gifFps: '15', forceH264: false, mergePdf: true, maxImg: '0', maxVid: '0',
 };
 try { Object.assign(opts, JSON.parse(localStorage.getItem('convert.opts') || '{}')); } catch {}
 const optEls = {
   quality: $('#optQuality'), videoQ: $('#optVideoQ'), dpi: $('#optDpi'), gifW: $('#optGifW'), gifFps: $('#optGifFps'),
-  forceH264: $('#optForceH264'), mergePdf: $('#optMergePdf'),
+  forceH264: $('#optForceH264'), mergePdf: $('#optMergePdf'), maxImg: $('#optMaxImg'), maxVid: $('#optMaxVid'),
 };
 for (const [k, el] of Object.entries(optEls)) {
+  if (!el) continue;
   if (el.type === 'checkbox') el.checked = !!opts[k]; else el.value = opts[k];
   el.addEventListener('input', () => {
     opts[k] = el.type === 'checkbox' ? el.checked : el.value;
@@ -167,6 +212,14 @@ const baseName = (n) => n.replace(/\.[^.]+$/, '') || 'fisier';
 const fmtSize = (b) => b < 1024 ? b + ' B' : b < 1048576 ? (b / 1024).toFixed(0) + ' KB' : b < 1073741824 ? (b / 1048576).toFixed(1) + ' MB' : (b / 1073741824).toFixed(2) + ' GB';
 const canvasToBlob = (c, type, q) => new Promise((res) => c.toBlob(res, type, q));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const fmtTime = (s) => { s = Math.max(0, s); const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), x = (s % 60); const ss = (x < 10 ? '0' : '') + (Number.isInteger(x) ? x : x.toFixed(1)); return h ? `${h}:${String(m).padStart(2, '0')}:${ss}` : `${m}:${ss}`; };
+function parseTime(str) {
+  str = (str || '').trim().replace(',', '.');
+  if (!str) return null;
+  const parts = str.split(':').map(Number);
+  if (parts.some((n) => !Number.isFinite(n) || n < 0) || parts.length > 3) return NaN;
+  return parts.reduce((t, n) => t * 60 + n, 0);
+}
 function toast(msg, ms = 3200) {
   const t = $('#toast'); t.textContent = msg; t.hidden = false;
   clearTimeout(toast._t); toast._t = setTimeout(() => (t.hidden = true), ms);
@@ -178,7 +231,7 @@ async function decodeImage(file, ext, job) {
     const url = URL.createObjectURL(file);
     try {
       const img = new Image(); img.src = url; await img.decode();
-      let w = img.naturalWidth || 1024, h = img.naturalHeight || 1024;
+      const w = img.naturalWidth || 1024, h = img.naturalHeight || 1024;
       const s = Math.max(1, 2048 / Math.max(w, h)); // render svgs crisp
       return { src: img, w: Math.round(w * s), h: Math.round(h * s), cleanup: () => URL.revokeObjectURL(url) };
     } catch (e) { URL.revokeObjectURL(url); throw new Error('SVG invalid'); }
@@ -197,23 +250,24 @@ async function decodeImage(file, ext, job) {
   }
   // last resort: let ffmpeg decode it (tiff, odd bmp, ico…)
   job?.say('Decodez cu ffmpeg…', true);
-  const png = await ffmpegRun(file, ext, 'png', ['-frames:v', '1'], job, false);
+  const png = await ffmpegRun(file, ext, 'png', ['-frames:v', '1'], job);
   const bmp = await createImageBitmap(png);
   return { src: bmp, w: bmp.width, h: bmp.height, cleanup: () => bmp.close() };
 }
-function drawToCanvas(img, bg) {
+function drawToCanvas(img, bg, maxSide = 0) {
   let { w, h } = img;
-  let scaled = false;
+  let scaled = false, resized = false;
+  if (maxSide && Math.max(w, h) > maxSide) { const s = maxSide / Math.max(w, h); w = Math.round(w * s); h = Math.round(h * s); resized = true; }
   if (w * h > MAX_PIXELS) { const s = Math.sqrt(MAX_PIXELS / (w * h)); w = Math.floor(w * s); h = Math.floor(h * s); scaled = true; }
   const c = document.createElement('canvas'); c.width = w; c.height = h;
   const ctx = c.getContext('2d');
   if (bg) { ctx.fillStyle = bg; ctx.fillRect(0, 0, w, h); }
   ctx.imageSmoothingQuality = 'high';
   ctx.drawImage(img.src, 0, 0, w, h);
-  return { canvas: c, scaled };
+  return { canvas: c, scaled, resized };
 }
-async function encodeCanvas(canvas, target) {
-  const q = opts.quality / 100;
+async function encodeCanvas(canvas, target, quality = opts.quality) {
+  const q = quality / 100;
   if (target === 'png') return canvasToBlob(canvas, 'image/png');
   if (target === 'jpg') return canvasToBlob(canvas, 'image/jpeg', q);
   if (target === 'webp') {
@@ -221,20 +275,50 @@ async function encodeCanvas(canvas, target) {
     if (b && b.type === 'image/webp') return b;
     // Safari can't encode WebP from canvas → ffmpeg
     const png = await canvasToBlob(canvas, 'image/png');
-    return ffmpegRun(png, 'png', 'webp', ['-c:v', 'libwebp', '-quality', String(opts.quality)], null, false);
+    return ffmpegRun(png, 'png', 'webp', ['-c:v', 'libwebp', '-quality', String(quality)], null);
   }
   throw new Error('format necunoscut');
 }
 async function imageConvert(job, target) {
   if (target === 'pdf') return imagesToPdf([job], job);
-  job.say('Convertesc…', true);
+  if (target === 'docx' || target === 'txt') return imageOcr(job, target);
+  const small = target === 'small';
+  const fmt = small ? (['jpg', 'jpeg', 'jfif'].includes(job.ext) ? 'jpg' : job.ext === 'webp' ? 'webp' : 'jpg') : target;
+  job.say(small ? 'Comprim…' : 'Convertesc…', true);
   const img = await decodeImage(job.file, job.ext, job);
   try {
-    const { canvas, scaled } = drawToCanvas(img, target === 'jpg' ? '#ffffff' : null);
-    const blob = await encodeCanvas(canvas, target);
-    if (scaled) job.note = 'Poza era prea mare pentru iPhone, am micșorat-o.';
-    return [{ name: `${baseName(job.file.name)}.${target}`, blob }];
+    const maxSide = +opts.maxImg || (small ? 2560 : 0);
+    const { canvas, scaled, resized } = drawToCanvas(img, fmt === 'jpg' ? '#ffffff' : null, maxSide);
+    let blob = await encodeCanvas(canvas, fmt, small ? Math.min(opts.quality, 78) : opts.quality);
+    const notes = [];
+    if (resized) notes.push(`Redimensionată la ${canvas.width}×${canvas.height}.`);
+    if (scaled) notes.push('Poza era prea mare pentru iPhone, am micșorat-o.');
+    if (small) {
+      if (blob.size >= job.file.size && fmt === job.ext.replace(/jpeg|jfif/, 'jpg')) { blob = job.file; notes.push('Era deja optimizată, am păstrat originalul.'); }
+      else notes.push(`−${Math.max(0, Math.round((1 - blob.size / job.file.size) * 100))}% față de original.`);
+      if (fmt !== job.ext.replace(/jpeg|jfif/, 'jpg')) notes.push(`Salvată ca ${fmt.toUpperCase()}.`);
+    }
+    job.note = notes.join(' ');
+    return [{ name: `${baseName(job.file.name)}${small ? '-mic' : ''}.${fmt}`, blob }];
   } finally { img.cleanup?.(); }
+}
+async function imageOcr(job, target) {
+  const img = await decodeImage(job.file, job.ext, job);
+  let text;
+  try {
+    const { canvas } = drawToCanvas(img, '#ffffff', 4000);
+    text = await ocrText(canvas, job);
+  } finally { img.cleanup?.(); }
+  const paras = ocrParas(text);
+  if (!paras.length) throw new Error('N-am găsit text în poză.');
+  job.note = 'Text recunoscut cu OCR — recitește-l, pot fi greșeli.';
+  if (target === 'txt') return [{ name: `${baseName(job.file.name)}.txt`, blob: new Blob([paras.join('\n\n')], { type: MIME.txt }) }];
+  const D = await lib.docx();
+  const doc = new D.Document({
+    styles: { default: { document: { run: { font: 'Calibri', size: 22 } } } },
+    sections: [{ children: paras.map((p) => new D.Paragraph({ spacing: { after: 120 }, children: [new D.TextRun(p)] })) }],
+  });
+  return [{ name: `${baseName(job.file.name)}.docx`, blob: await D.Packer.toBlob(doc) }];
 }
 async function imagesToPdf(jobs, statusJob) {
   const jsPDF = await lib.jsPDF();
@@ -244,7 +328,7 @@ async function imagesToPdf(jobs, statusJob) {
     statusJob.say(jobs.length > 1 ? `Pagina ${++i}/${jobs.length}…` : 'Fac PDF-ul…', true);
     const img = await decodeImage(j.file, j.ext, statusJob);
     try {
-      const { canvas } = drawToCanvas(img, '#ffffff');
+      const { canvas } = drawToCanvas(img, '#ffffff', +opts.maxImg || 0);
       // page: long side = A4 height (842pt), image stays at full resolution inside
       const s = 842 / Math.max(canvas.width, canvas.height);
       const pw = canvas.width * s, ph = canvas.height * s;
@@ -261,16 +345,13 @@ async function imagesToPdf(jobs, statusJob) {
 }
 
 /* ---------------- ffmpeg pipelines ---------------- */
-async function ffmpegRun(input, inExt, outExt, args, job, withProgress = true) {
+async function ffmpegRun(input, inExt, outExt, args, job) {
   if (!ff.ready) job?.say('Pornesc motorul video (prima dată ~30 MB)…', true);
   await ff.load();
   const inName = `in.${inExt || 'bin'}`, outName = `out.${outExt}`;
   await ff.write(inName, new Uint8Array(await input.arrayBuffer()));
   try {
-    const info = withProgress ? await ff.probe(inName) : { duration: 0 };
-    const { ret, logs } = await ff.exec(['-hide_banner', '-y', '-i', inName, ...args, outName], {
-      duration: info.duration, onProgress: (p) => job?.progress(p),
-    });
+    const { ret, logs } = await ff.exec(['-hide_banner', '-y', '-i', inName, ...args, outName]);
     if (ret !== 0) throw new Error(lastError(logs));
     const data = await ff.read(outName);
     return new Blob([data], { type: MIME[outExt] || 'application/octet-stream' });
@@ -284,27 +365,42 @@ function lastError(logs) {
 }
 
 async function mediaConvert(job, target) {
+  const trim = readTrim(job);
   if (!ff.ready) job.say('Pornesc motorul video (prima dată ~30 MB)…', true);
   await ff.load();
-  const inName = `in.${job.ext}`, outName = `out.${target}`;
+  const outExt = target === 'small' ? 'mp4' : target;
+  const inName = `in.${job.ext}`, outName = `out.${outExt}`;
   job.say('Citesc fișierul…', true);
   await ff.write(inName, new Uint8Array(await job.file.arrayBuffer()));
   try {
     const info = await ff.probe(inName);
-    const plans = buildPlans(info, target, job);
+    if (trim.start != null && info.duration && trim.start >= info.duration) throw new Error(`Începutul (${fmtTime(trim.start)}) e după finalul clipului (${fmtTime(info.duration)}).`);
+    const pre = [];
+    if (trim.start) pre.push('-ss', String(trim.start));
+    if (trim.end != null) pre.push('-t', String(trim.end - (trim.start || 0)));
+    const dur = Math.max(0.1, (trim.end ?? info.duration) - (trim.start || 0));
+    const plans = buildPlans(info, target, trim);
     let lastLogs = [];
     for (const plan of plans) {
       job.say(plan.label, !info.duration);
       job.progress(0);
-      const { ret, logs } = await ff.exec(['-hide_banner', '-y', '-i', inName, ...plan.args, outName], {
-        duration: info.duration, onProgress: (p) => job.progress(p),
+      const { ret, logs } = await ff.exec(['-hide_banner', '-y', ...pre, '-i', inName, ...plan.args, outName], {
+        duration: dur, onProgress: (p) => job.progress(p),
       });
       lastLogs = logs;
       if (ret === 0) {
         const data = await ff.read(outName);
         if (data.byteLength > 0) {
-          if (plan.note) job.note = plan.note;
-          return [{ name: `${baseName(job.file.name)}.${target}`, blob: new Blob([data], { type: MIME[target] }) }];
+          const notes = [];
+          if (plan.note) notes.push(plan.note);
+          if (trim.start != null || trim.end != null) notes.push(`Tăiat ${fmtTime(trim.start || 0)} → ${fmtTime(trim.end ?? info.duration)}.`);
+          if (target === 'small') {
+            if (data.byteLength >= job.file.size) { job.note = 'Nu s-a putut micșora mai mult — e deja comprimat bine.'; return [{ name: job.file.name, blob: job.file }]; }
+            notes.push(`−${Math.round((1 - data.byteLength / job.file.size) * 100)}% față de original.`);
+          }
+          job.note = notes.join(' ');
+          const suffix = target === 'small' ? '-mic' : (trim.start != null || trim.end != null) ? '-taiat' : '';
+          return [{ name: `${baseName(job.file.name)}${suffix}.${outExt}`, blob: new Blob([data], { type: MIME[outExt] }) }];
         }
       }
       await ff.unlink(outName).catch(() => {});
@@ -314,44 +410,54 @@ async function mediaConvert(job, target) {
     await ff.unlink(inName).catch(() => {}); await ff.unlink(outName).catch(() => {});
   }
 }
-function buildPlans(info, target, job) {
+function buildPlans(info, target, trim) {
   const crf = String(opts.videoQ);
-  const even = 'scale=trunc(iw/2)*2:trunc(ih/2)*2';
-  const x264 = ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', crf, '-pix_fmt', 'yuv420p', '-vf', even];
-  const aac = ['-c:a', 'aac', '-b:a', '160k'];
-  const mapVA = ['-map', '0:v:0', '-map', '0:a:0?'];
+  const maxH = +opts.maxVid || 0;
+  const scaleTo = (H) => (H ? `scale=-2:'trunc(min(ih,${H})/2)*2'` : 'scale=trunc(iw/2)*2:trunc(ih/2)*2');
+  const needsScale = maxH && info.h > maxH;
+  const x264 = (c = crf, H = maxH) => ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', c, '-pix_fmt', 'yuv420p', '-vf', scaleTo(H)];
+  const aac = (br = '160k') => (trim.mute ? ['-an'] : ['-c:a', 'aac', '-b:a', br]);
+  const mapVA = trim.mute ? ['-map', '0:v:0'] : ['-map', '0:v:0', '-map', '0:a:0?'];
   const needAudio = () => { if (!info.a) throw new Error('Fișierul nu are pistă audio.'); };
   const needVideo = () => { if (!info.v) throw new Error('Fișierul nu are pistă video.'); };
   const enc = { label: 'Re-encodez video (durează)…', args: [] };
   switch (target) {
+    case 'small': {
+      needVideo();
+      const H = maxH || (info.h > 1080 ? 1080 : 0);
+      const c = String(Math.max(27, +crf + 4));
+      return [{ label: 'Comprim video (durează)…', args: [...mapVA, ...x264(c, H), ...aac('128k'), '-movflags', '+faststart'] }];
+    }
     case 'mp4': case 'mov': {
       needVideo();
-      const aOk = !info.a || ['aac', 'mp3', 'alac'].includes(info.a);
-      const vOk = info.v === 'h264' || (info.v === 'hevc' && !opts.forceH264);
+      const aOk = !info.a || trim.mute || ['aac', 'mp3', 'alac'].includes(info.a);
+      const vOk = !needsScale && (info.v === 'h264' || (info.v === 'hevc' && !opts.forceH264));
       const fast = target === 'mp4' ? ['-movflags', '+faststart'] : [];
-      const encode = { ...enc, args: [...mapVA, ...x264, ...aac, ...fast] };
+      const encode = { ...enc, args: [...mapVA, ...x264(), ...aac(), ...fast] };
       if (vOk) {
-        const copy = { label: 'Schimb containerul (rapid, fără pierderi)…', args: [...mapVA, '-c', 'copy', ...(info.v === 'hevc' ? ['-tag:v', 'hvc1'] : []), ...fast] };
-        if (!aOk) copy.args = [...mapVA, '-c:v', 'copy', ...(info.v === 'hevc' ? ['-tag:v', 'hvc1'] : []), ...aac, ...fast];
+        const tag = info.v === 'hevc' ? ['-tag:v', 'hvc1'] : [];
+        const audio = trim.mute ? ['-an'] : aOk ? ['-c:a', 'copy'] : aac();
+        const copy = { label: 'Schimb containerul (rapid, fără pierderi)…', args: [...mapVA, '-c:v', 'copy', ...tag, ...audio, ...fast] };
         if (info.v === 'hevc') copy.note = 'Video-ul e HEVC (H.265), l-am păstrat așa. Dacă nu merge pe un PC vechi, bifează „forțează H.264” în setări.';
+        if (trim.start) copy.note = ((copy.note || '') + ' Tăiere rapidă: începutul poate sări la cel mai apropiat cadru-cheie (~1 s).').trim();
         return [copy, encode];
       }
       return [encode];
     }
     case 'mkv':
       needVideo();
-      return [
-        { label: 'Schimb containerul (rapid)…', args: ['-map', '0', '-c', 'copy'] },
-        { ...enc, args: [...mapVA, ...x264, ...aac] },
+      return needsScale ? [{ ...enc, args: [...mapVA, ...x264(), ...aac()] }] : [
+        { label: 'Schimb containerul (rapid)…', args: trim.mute ? ['-map', '0', '-map', '-0:a', '-c', 'copy'] : ['-map', '0', '-c', 'copy'] },
+        { ...enc, args: [...mapVA, ...x264(), ...aac()] },
       ];
     case 'webm': {
       needVideo();
       const br = { 20: '4M', 23: '2500k', 28: '1200k' }[crf] || '2500k';
-      return [{ label: 'Encodez WebM (durează)…', args: [...mapVA, '-c:v', 'libvpx', '-deadline', 'realtime', '-cpu-used', '8', '-b:v', br, '-crf', '10', '-vf', even, '-c:a', 'libvorbis', '-q:a', '5'] }];
+      return [{ label: 'Encodez WebM (durează)…', args: [...mapVA, '-c:v', 'libvpx', '-deadline', 'realtime', '-cpu-used', '8', '-b:v', br, '-crf', '10', '-vf', scaleTo(maxH), ...(trim.mute ? ['-an'] : ['-c:a', 'libvorbis', '-q:a', '5'])] }];
     }
     case 'avi':
       needVideo();
-      return [{ label: 'Encodez AVI…', args: [...mapVA, '-c:v', 'mpeg4', '-q:v', crf === '20' ? '2' : crf === '28' ? '6' : '4', '-vf', even, '-c:a', 'libmp3lame', '-q:a', '4'] }];
+      return [{ label: 'Encodez AVI…', args: [...mapVA, '-c:v', 'mpeg4', '-q:v', crf === '20' ? '2' : crf === '28' ? '6' : '4', '-vf', scaleTo(maxH), ...(trim.mute ? ['-an'] : ['-c:a', 'libmp3lame', '-q:a', '4'])] }];
     case 'gif': {
       needVideo();
       const w = opts.gifW, fps = opts.gifFps;
@@ -370,18 +476,25 @@ function buildPlans(info, target, job) {
   }
   throw new Error('Conversie nesuportată');
 }
+function readTrim(job) {
+  const el = job.el;
+  const start = parseTime($('.t-start', el)?.value), end = parseTime($('.t-end', el)?.value);
+  if (Number.isNaN(start) || Number.isNaN(end)) throw new Error('Timp invalid. Scrie gen 1:30 sau 90.');
+  if (start != null && end != null && end <= start) throw new Error('Finalul trebuie să fie după început.');
+  return { start: start || null, end, mute: !!$('.t-mute', el)?.checked };
+}
 
 /* ---------------- PDF pipelines ---------------- */
+async function pdfBytes(job) { return new Uint8Array(await job.file.arrayBuffer()); }
 async function openPdf(job) {
   const pdfjs = await lib.pdfjs();
-  const data = new Uint8Array(await job.file.arrayBuffer());
-  try { return await pdfjs.getDocument({ data, isEvalSupported: false }).promise; }
+  try { return await pdfjs.getDocument({ data: await pdfBytes(job), isEvalSupported: false }).promise; }
   catch (e) { if (/password/i.test(e.name + e.message)) throw new Error('PDF-ul are parolă.'); throw e; }
 }
 async function renderPdfPage(page, scale) {
   const vp = page.getViewport({ scale });
-  let w = Math.floor(vp.width), h = Math.floor(vp.height);
-  if (w * h > MAX_PIXELS) { const s = Math.sqrt(MAX_PIXELS / (w * h)); return renderPdfPage(page, scale * s); }
+  const w = Math.floor(vp.width), h = Math.floor(vp.height);
+  if (w * h > MAX_PIXELS) { const s = Math.sqrt(MAX_PIXELS / (w * h)); return renderPdfPage(page, scale * s * 0.98); }
   const c = document.createElement('canvas'); c.width = w; c.height = h;
   const ctx = c.getContext('2d');
   ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, w, h);
@@ -436,37 +549,52 @@ function linesToParas(lines) {
   }
   return paras;
 }
+const hasRealText = (tc) => tc.items.reduce((n, it) => n + ((it.str || '').trim().length), 0) > 20;
+
 async function pdfToDocx(job) {
   const pdf = await openPdf(job);
   const D = await lib.docx();
   const pages = [];
   const sizes = [];
-  for (let i = 1; i <= pdf.numPages; i++) {
-    job.say(`Citesc pagina ${i}/${pdf.numPages}…`); job.progress((i - 1) / pdf.numPages);
+  let ocrPages = 0, imgPages = 0;
+  const n = pdf.numPages;
+  for (let i = 1; i <= n; i++) {
+    job.say(`Citesc pagina ${i}/${n}…`); job.progress((i - 1) / n);
     const page = await pdf.getPage(i);
     const tc = await page.getTextContent();
-    const paras = linesToParas(pageLines(tc.items, tc.styles));
+    let paras = hasRealText(tc) ? linesToParas(pageLines(tc.items, tc.styles)) : [];
     paras.forEach((p) => sizes.push(p.size));
-    let image = null;
+    let image = null, ocr = null;
     if (!paras.length) {
-      const c = await renderPdfPage(page, 2);
-      image = { data: new Uint8Array(await (await canvasToBlob(c, 'image/jpeg', 0.85)).arrayBuffer()), w: c.width, h: c.height };
+      const c = await renderPdfPage(page, 3);
+      const text = await ocrText(c, job, `OCR pagina ${i}/${n}…`);
+      ocr = ocrParas(text);
+      if (ocr.length) ocrPages++;
+      else {
+        imgPages++;
+        const s = 1600 / c.width;
+        const small = document.createElement('canvas'); small.width = 1600; small.height = Math.round(c.height * s);
+        small.getContext('2d').drawImage(c, 0, 0, small.width, small.height);
+        image = { data: new Uint8Array(await (await canvasToBlob(small, 'image/jpeg', 0.85)).arrayBuffer()), w: small.width, h: small.height };
+      }
       c.width = c.height = 0;
     }
-    pages.push({ paras, image });
+    pages.push({ paras, image, ocr });
     page.cleanup();
   }
   pdf.destroy();
   sizes.sort((a, b) => a - b);
   const body = sizes[Math.floor(sizes.length / 2)] || 11;
   const children = [];
-  let scanned = 0;
   pages.forEach((pg, idx) => {
     if (idx > 0) children.push(new D.Paragraph({ children: [new D.PageBreak()] }));
     if (pg.image) {
-      scanned++;
       const w = 600, h = Math.round((pg.image.h / pg.image.w) * w);
       children.push(new D.Paragraph({ children: [new D.ImageRun({ type: 'jpg', data: pg.image.data, transformation: { width: w, height: Math.min(h, 860) } })] }));
+      return;
+    }
+    if (pg.ocr) {
+      for (const t of pg.ocr) children.push(new D.Paragraph({ spacing: { after: 120 }, children: [new D.TextRun({ text: t, size: 22 })] }));
       return;
     }
     for (const p of pg.paras) {
@@ -477,24 +605,131 @@ async function pdfToDocx(job) {
   });
   const doc = new D.Document({ styles: { default: { document: { run: { font: 'Calibri' } } } }, sections: [{ children }] });
   const blob = await D.Packer.toBlob(doc);
-  if (scanned === pages.length) job.note = 'PDF scanat (fără text) — am pus paginile ca imagini în Word.';
-  else if (scanned) job.note = `${scanned} pagini fără text au fost puse ca imagini.`;
+  const notes = [];
+  if (ocrPages) notes.push(ocrPages === n ? 'PDF scanat — text recunoscut cu OCR, recitește-l.' : `${ocrPages} pagini scanate citite cu OCR.`);
+  if (imgPages) notes.push(`${imgPages} pagini fără text puse ca imagini.`);
+  job.note = notes.join(' ');
   return [{ name: `${baseName(job.file.name)}.docx`, blob }];
 }
 async function pdfToTxt(job) {
   const pdf = await openPdf(job);
   const parts = [];
-  for (let i = 1; i <= pdf.numPages; i++) {
-    job.say(`Pagina ${i}/${pdf.numPages}…`); job.progress((i - 1) / pdf.numPages);
+  let ocrPages = 0;
+  const n = pdf.numPages;
+  for (let i = 1; i <= n; i++) {
+    job.say(`Pagina ${i}/${n}…`); job.progress((i - 1) / n);
     const page = await pdf.getPage(i);
     const tc = await page.getTextContent();
-    parts.push(linesToParas(pageLines(tc.items, tc.styles)).map((p) => p.text).join('\n\n'));
+    if (hasRealText(tc)) parts.push(linesToParas(pageLines(tc.items, tc.styles)).map((p) => p.text).join('\n\n'));
+    else {
+      const c = await renderPdfPage(page, 3);
+      parts.push(ocrParas(await ocrText(c, job, `OCR pagina ${i}/${n}…`)).join('\n\n'));
+      c.width = c.height = 0; ocrPages++;
+    }
     page.cleanup();
   }
   pdf.destroy();
   const text = parts.join('\n\n\f\n\n');
-  if (!text.replace(/\s/g, '')) throw new Error('PDF-ul nu conține text (e scanat). Încearcă PDF → JPG.');
+  if (!text.replace(/\s/g, '')) throw new Error('N-am găsit niciun text în PDF.');
+  if (ocrPages) job.note = 'Pagini scanate citite cu OCR — recitește textul.';
   return [{ name: `${baseName(job.file.name)}.txt`, blob: new Blob([text], { type: MIME.txt }) }];
+}
+async function pdfSearchable(job) {
+  const pdf = await openPdf(job);
+  const { PDFDocument } = await lib.pdflib();
+  const src = await PDFDocument.load(await pdfBytes(job), { ignoreEncryption: true });
+  const out = await PDFDocument.create();
+  const n = pdf.numPages;
+  let ocrPages = 0;
+  for (let i = 1; i <= n; i++) {
+    job.say(`Pagina ${i}/${n}…`); job.progress((i - 1) / n);
+    const page = await pdf.getPage(i);
+    const tc = await page.getTextContent();
+    if (hasRealText(tc)) {
+      const [p] = await out.copyPages(src, [i - 1]); out.addPage(p);
+    } else {
+      const DPI = 216;
+      const c = await renderPdfPage(page, DPI / 72);
+      const jpg = await canvasToBlob(c, 'image/jpeg', 0.8);
+      const w = await getOcr(job);
+      await w.setParameters({ user_defined_dpi: String(Math.round(DPI * c.width / Math.floor(page.getViewport({ scale: DPI / 72 }).width))) });
+      job.say(`OCR pagina ${i}/${n}…`);
+      ocrProgress = (p) => job.progress((i - 1 + p) / n);
+      let data;
+      try { ({ data } = await w.recognize(jpg, {}, { pdf: true })); } finally { ocrProgress = null; }
+      const one = await PDFDocument.load(new Uint8Array(data.pdf));
+      const [p] = await out.copyPages(one, [0]);
+      const vp = page.getViewport({ scale: 1 });
+      const { width, height } = p.getSize();
+      if (Math.abs(width - vp.width) > 2) { p.scale(vp.width / width, vp.height / height); }
+      out.addPage(p);
+      ocrPages++;
+      c.width = c.height = 0;
+    }
+    page.cleanup();
+  }
+  pdf.destroy();
+  if (!ocrPages) { job.note = 'PDF-ul avea deja text selectabil — nu era nevoie de OCR.'; return [{ name: job.file.name, blob: job.file }]; }
+  job.note = `${ocrPages} ${ocrPages === 1 ? 'pagină trecută' : 'pagini trecute'} prin OCR — acum poți căuta și copia textul.`;
+  const bytes = await out.save();
+  return [{ name: `${baseName(job.file.name)}-cautabil.pdf`, blob: new Blob([bytes], { type: MIME.pdf }) }];
+}
+async function pdfCompress(job) {
+  const pdf = await openPdf(job);
+  const jsPDF = await lib.jsPDF();
+  let doc = null;
+  const n = pdf.numPages;
+  let textPages = 0;
+  for (let i = 1; i <= n; i++) {
+    job.say(`Comprim pagina ${i}/${n}…`); job.progress((i - 1) / n);
+    const page = await pdf.getPage(i);
+    if (hasRealText(await page.getTextContent())) textPages++;
+    const vp = page.getViewport({ scale: 1 });
+    const c = await renderPdfPage(page, 1.6);
+    const pw = vp.width, ph = vp.height, orient = pw > ph ? 'l' : 'p';
+    if (!doc) doc = new jsPDF({ unit: 'pt', format: [pw, ph], orientation: orient, compress: true });
+    else doc.addPage([pw, ph], orient);
+    doc.addImage(c.toDataURL('image/jpeg', 0.6), 'JPEG', 0, 0, pw, ph, undefined, 'FAST');
+    c.width = c.height = 0; page.cleanup();
+  }
+  pdf.destroy();
+  const blob = doc.output('blob');
+  if (blob.size >= job.file.size * 0.9) {
+    job.note = 'PDF-ul e deja mic — comprimarea n-ar fi ajutat, am păstrat originalul.';
+    return [{ name: job.file.name, blob: job.file }];
+  }
+  job.note = `−${Math.round((1 - blob.size / job.file.size) * 100)}% față de original.` + (textPages ? ' Textul devine imagine (nu se mai poate selecta).' : '');
+  return [{ name: `${baseName(job.file.name)}-mic.pdf`, blob }];
+}
+async function pdfSplit(job) {
+  job.say('Separ paginile…', true);
+  const { PDFDocument } = await lib.pdflib();
+  const src = await PDFDocument.load(await pdfBytes(job), { ignoreEncryption: true });
+  const n = src.getPageCount(), pad = String(n).length;
+  if (n === 1) throw new Error('PDF-ul are o singură pagină.');
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    job.progress(i / n);
+    const d = await PDFDocument.create();
+    const [p] = await d.copyPages(src, [i]); d.addPage(p);
+    out.push({ name: `${baseName(job.file.name)}-p${String(i + 1).padStart(pad, '0')}.pdf`, blob: new Blob([await d.save()], { type: MIME.pdf }) });
+  }
+  return out;
+}
+async function pdfMerge(list, statusJob) {
+  const { PDFDocument } = await lib.pdflib();
+  const out = await PDFDocument.create();
+  let k = 0;
+  for (const j of list) {
+    statusJob.say(`Adaug ${++k}/${list.length}…`); statusJob.progress((k - 1) / list.length);
+    let src;
+    try { src = await PDFDocument.load(await pdfBytes(j), { ignoreEncryption: true }); }
+    catch { throw new Error(`Nu pot citi ${j.file.name}.`); }
+    const pages = await out.copyPages(src, src.getPageIndices());
+    pages.forEach((p) => out.addPage(p));
+  }
+  statusJob.note = `${list.length} PDF-uri, ${out.getPageCount()} pagini.`;
+  return [{ name: list.length > 1 ? 'unite.pdf' : list[0].file.name, blob: new Blob([await out.save()], { type: MIME.pdf }) }];
 }
 
 /* ---------------- Word pipelines ---------------- */
@@ -533,7 +768,7 @@ async function docxToPdf(job) {
       doc.addImage(canvas.toDataURL('image/jpeg', 0.92), 'JPEG', 0, 0, pw, ph, undefined, 'FAST');
       canvas.width = canvas.height = 0;
     }
-    job.note = 'Aspect fidel, dar textul din PDF e imagine (nu se poate selecta).';
+    job.note = 'Aspect fidel, dar textul din PDF e imagine (nu se poate selecta). Vrei text selectabil? Trece-l apoi prin „PDF căutabil”.';
     return [{ name: `${baseName(job.file.name)}.pdf`, blob: doc.output('blob') }];
   } finally { host.remove(); }
 }
@@ -605,6 +840,105 @@ async function txtToDocx(job) {
   return [{ name: `${baseName(job.file.name)}.docx`, blob: await D.Packer.toBlob(doc) }];
 }
 
+
+/* ---------------- spreadsheets ---------------- */
+async function readWorkbook(job) {
+  const XLSX = await lib.XLSX();
+  const buf = await job.file.arrayBuffer();
+  if (job.ext === 'csv') return { XLSX, wb: XLSX.read(await readText(job.file), { type: 'string', raw: false }) };
+  return { XLSX, wb: XLSX.read(buf, { type: 'array', cellDates: true }) };
+}
+async function sheetConvert(job, target) {
+  job.say('Convertesc…', true);
+  const { XLSX, wb } = await readWorkbook(job);
+  if (target === 'xlsx') {
+    const out = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
+    return [{ name: `${baseName(job.file.name)}.xlsx`, blob: new Blob([out], { type: MIME.xlsx }) }];
+  }
+  const outs = wb.SheetNames.map((n) => ({
+    name: wb.SheetNames.length > 1 ? `${baseName(job.file.name)}-${n.replace(/[\\/:*?"<>|]/g, '_')}.csv` : `${baseName(job.file.name)}.csv`,
+    blob: new Blob(['﻿' + XLSX.utils.sheet_to_csv(wb.Sheets[n])], { type: MIME.csv }),
+  }));
+  if (outs.length > 1) job.note = 'Câte un CSV pentru fiecare foaie.';
+  return outs;
+}
+async function sheetToPdf(job) {
+  job.say('Citesc tabelul…', true);
+  const [{ XLSX, wb }, html2canvas, jsPDF] = await Promise.all([readWorkbook(job), lib.html2canvas(), lib.jsPDF()]);
+  const PW = 841.89, PH = 595.28, M = 28; // A4 landscape, pt
+  let doc = null, pages = 0;
+  for (const name of wb.SheetNames) {
+    const ws = wb.Sheets[name];
+    if (!ws['!ref']) continue;
+    const host = document.createElement('div');
+    host.className = 'render-host sheet-host';
+    host.innerHTML = (wb.SheetNames.length > 1 ? `<h3></h3>` : '') + XLSX.utils.sheet_to_html(ws, { editable: false });
+    if (wb.SheetNames.length > 1) host.querySelector('h3').textContent = name;
+    document.body.appendChild(host);
+    try {
+      const table = host.querySelector('table');
+      if (!table || !table.rows.length) continue;
+      job.say(`Randez „${name}”…`, true);
+      const canvas = await html2canvas(host, {
+        scale: 2, backgroundColor: '#ffffff', logging: false, windowWidth: Math.max(1200, host.scrollWidth + 50),
+        onclone: (d) => { for (const h of d.querySelectorAll('.render-host')) h.style.opacity = '1'; },
+      });
+      const cssW = host.offsetWidth, k = canvas.width / cssW;
+      const scale = Math.min(1, (PW - 2 * M) / (cssW * 0.75)); // css px → pt, fit to width
+      const pageCss = (PH - 2 * M) / (0.75 * scale);
+      const rowBottoms = [...table.rows].map((r) => r.offsetTop + r.offsetHeight + table.offsetTop);
+      let y = 0;
+      while (y < host.offsetHeight - 1) {
+        let end = y + pageCss;
+        if (end < host.offsetHeight) {
+          const fits = rowBottoms.filter((b) => b > y + 1 && b <= end);
+          if (fits.length) end = fits[fits.length - 1];
+        } else end = host.offsetHeight;
+        const slice = document.createElement('canvas');
+        slice.width = canvas.width; slice.height = Math.max(1, Math.round((end - y) * k));
+        slice.getContext('2d').drawImage(canvas, 0, Math.round(y * k), canvas.width, slice.height, 0, 0, canvas.width, slice.height);
+        if (!doc) doc = new jsPDF({ unit: 'pt', format: 'a4', orientation: 'l', compress: true });
+        else doc.addPage('a4', 'l');
+        doc.addImage(slice.toDataURL('image/jpeg', 0.92), 'JPEG', M, M, cssW * 0.75 * scale, (end - y) * 0.75 * scale, undefined, 'FAST');
+        pages++; y = end;
+        job.progress(Math.min(1, y / host.offsetHeight));
+      }
+      canvas.width = canvas.height = 0;
+    } finally { host.remove(); }
+  }
+  if (!doc) throw new Error('Fișierul nu are date.');
+  job.note = `${pages} ${pages === 1 ? 'pagină' : 'pagini'} A4 landscape. Formatările complexe (grafice, culori condiționale) nu sunt păstrate.`;
+  return [{ name: `${baseName(job.file.name)}.pdf`, blob: doc.output('blob') }];
+}
+
+/* ---------------- PDF → PowerPoint ---------------- */
+async function pdfToPptx(job) {
+  const [pdf, PptxGenJS] = await Promise.all([openPdf(job), lib.pptx()]);
+  const p1 = await pdf.getPage(1);
+  const vp1 = p1.getViewport({ scale: 1 });
+  const pptx = new PptxGenJS();
+  const W = 13.333, H = W * (vp1.height / vp1.width);
+  pptx.defineLayout({ name: 'PDF', width: W, height: H });
+  pptx.layout = 'PDF';
+  const n = pdf.numPages;
+  for (let i = 1; i <= n; i++) {
+    job.say(`Slide ${i}/${n}…`); job.progress((i - 1) / n);
+    const page = await pdf.getPage(i);
+    const c = await renderPdfPage(page, 2);
+    const vp = page.getViewport({ scale: 1 });
+    const slide = pptx.addSlide();
+    // fit page into slide keeping aspect
+    const r = Math.min(W / vp.width, H / vp.height);
+    const w = vp.width * r, h = vp.height * r;
+    slide.addImage({ data: c.toDataURL('image/jpeg', 0.88), x: (W - w) / 2, y: (H - h) / 2, w, h });
+    c.width = c.height = 0; page.cleanup();
+  }
+  pdf.destroy();
+  const blob = await pptx.write({ outputType: 'blob' });
+  job.note = 'Fiecare pagină e un slide (ca imagine).';
+  return [{ name: `${baseName(job.file.name)}.pptx`, blob }];
+}
+
 /* ---------------- router ---------------- */
 async function convert(job, target) {
   switch (job.kind) {
@@ -612,9 +946,20 @@ async function convert(job, target) {
       if (job.ext === 'gif' && ['mp4', 'webm'].includes(target)) return mediaConvert(job, target);
       return imageConvert(job, target);
     case 'video': case 'audio': return mediaConvert(job, target);
-    case 'pdf': return target === 'docx' ? pdfToDocx(job) : target === 'txt' ? pdfToTxt(job) : pdfToImages(job, target);
+    case 'pdf':
+      switch (target) {
+        case 'docx': return pdfToDocx(job);
+        case 'txt': return pdfToTxt(job);
+        case 'ocr': return pdfSearchable(job);
+        case 'small': return pdfCompress(job);
+        case 'split': return pdfSplit(job);
+        case 'pptx': return pdfToPptx(job);
+        case 'merge': return pdfMerge([job], job);
+        default: return pdfToImages(job, target);
+      }
     case 'docx': return target === 'pdf' ? docxToPdf(job) : docxToTxt(job);
     case 'text': return target === 'pdf' ? txtToPdf(job) : txtToDocx(job);
+    case 'sheet': return target === 'pdf' ? sheetToPdf(job) : sheetConvert(job, target);
   }
   throw new Error('Tip de fișier necunoscut');
 }
@@ -653,9 +998,19 @@ function mountJob(job) {
   const chips = $('.targets', el);
   for (const t of targetsFor(job)) {
     const b = document.createElement('button');
-    b.className = 'chip'; b.textContent = t.toUpperCase(); b.dataset.t = t;
+    b.className = 'chip' + (LABELS[t] ? ' tool' : ''); b.textContent = labelFor(job, t); b.dataset.t = t;
+    if (TIPS[t]) b.title = TIPS[t];
     b.addEventListener('click', () => { if (job.state !== 'busy') setTarget(job, t); });
     chips.appendChild(b);
+  }
+  if (job.kind === 'video' || job.kind === 'audio') {
+    const tools = $('.tools', el); tools.hidden = false;
+    if (job.kind === 'audio') $('.t-mute-wrap', el).remove();
+    $('.tool-toggle', el).addEventListener('click', (e) => {
+      const tr = $('.trim', el); tr.hidden = !tr.hidden; e.currentTarget.classList.toggle('on', !tr.hidden);
+      if (!tr.hidden && !job.durationProbed) probeDuration(job);
+    });
+    for (const inp of el.querySelectorAll('.trim input')) inp.addEventListener('input', () => { if (job.state === 'done' || job.state === 'fail') resetJob(job); });
   }
   $('.x', el).addEventListener('click', () => removeJob(job));
   job.say = (m, indet = false) => { $('.msg', el).textContent = m; $('.bar i', el).classList.toggle('indet', indet); };
@@ -663,12 +1018,24 @@ function mountJob(job) {
   setTarget(job, job.target, true);
   queueEl.appendChild(el);
 }
+function probeDuration(job) {
+  job.durationProbed = true;
+  const m = document.createElement(job.kind === 'audio' ? 'audio' : 'video');
+  m.preload = 'metadata';
+  const url = URL.createObjectURL(job.file);
+  m.onloadedmetadata = () => {
+    if (Number.isFinite(m.duration)) { $('.dur', job.el).textContent = `Durată ${fmtTime(Math.round(m.duration * 10) / 10)}`; $('.t-end', job.el).placeholder = fmtTime(Math.floor(m.duration)); }
+    URL.revokeObjectURL(url);
+  };
+  m.onerror = () => URL.revokeObjectURL(url);
+  m.src = url;
+}
 
 function setTarget(job, t, silent) {
   job.target = t;
   for (const c of job.el.querySelectorAll('.targets .chip')) c.classList.toggle('on', c.dataset.t === t);
   const tg = $('.target', job.el);
-  tg.textContent = t ? t.toUpperCase() : 'alege format';
+  tg.textContent = t ? labelFor(job, t) : 'alege format';
   tg.classList.toggle('set', !!t);
   if (!silent && (job.state === 'done' || job.state === 'fail')) resetJob(job);
   refreshBulk();
@@ -687,16 +1054,17 @@ function removeJob(job) {
   refreshBulk();
 }
 
+const ORDER = ['jpg', 'png', 'webp', 'pdf', 'docx', 'pptx', 'xlsx', 'csv', 'txt', 'mp4', 'mov', 'mkv', 'webm', 'avi', 'gif', 'mp3', 'wav', 'm4a', 'ogg', 'flac', 'small', 'ocr', 'merge', 'split'];
 function refreshBulk() {
   $('#bulk').hidden = jobs.length === 0;
   const union = [];
   for (const j of jobs) for (const t of targetsFor(j)) if (!union.includes(t)) union.push(t);
-  const order = ['jpg', 'png', 'webp', 'pdf', 'docx', 'txt', 'mp4', 'mov', 'mkv', 'webm', 'avi', 'gif', 'mp3', 'wav', 'm4a', 'ogg', 'flac'];
-  union.sort((a, b) => order.indexOf(a) - order.indexOf(b));
+  union.sort((a, b) => ORDER.indexOf(a) - ORDER.indexOf(b));
   const box = $('#bulkChips'); box.innerHTML = '';
   for (const t of union) {
     const b = document.createElement('button');
-    b.className = 'chip'; b.textContent = t.toUpperCase();
+    b.className = 'chip' + (LABELS[t] ? ' tool' : ''); b.textContent = LABELS[t] || t.toUpperCase();
+    if (TIPS[t]) b.title = TIPS[t];
     const applicable = jobs.filter((j) => targetsFor(j).includes(t) && j.state !== 'busy');
     if (applicable.length && applicable.every((j) => j.target === t)) b.classList.add('on');
     b.addEventListener('click', () => { for (const j of applicable) setTarget(j, t); });
@@ -781,28 +1149,33 @@ async function runOne(job, fn) {
   }
 }
 
+async function runGroup(group, fn, label) {
+  if (group.length < 2) return;
+  const [first, ...rest] = group;
+  for (const j of rest) { j.state = 'busy'; j.el.classList.add('busy'); j.say(label, true); }
+  await runOne(first, () => fn(group, first));
+  for (const j of rest) {
+    j.el.classList.remove('busy');
+    if (first.state === 'done') { j.state = 'done'; j.el.classList.add('done'); j.say('Inclus în ' + first.outputs[0].name); }
+    else { j.state = 'idle'; j.say(''); }
+  }
+}
 async function runAll() {
   if (running) return;
   running = true; refreshBulk();
   try {
     const pending = jobs.filter((j) => j.target && j.state !== 'done' && j.state !== 'busy');
-    const pdfImgs = pending.filter((j) => j.kind === 'image' && j.target === 'pdf');
-    if (opts.mergePdf && pdfImgs.length > 1) {
-      const [first, ...rest] = pdfImgs;
-      for (const j of rest) { j.state = 'busy'; j.el.classList.add('busy'); j.say('Inclus în PDF-ul comun', true); }
-      await runOne(first, () => imagesToPdf(pdfImgs, first));
-      for (const j of rest) {
-        j.el.classList.remove('busy');
-        if (first.state === 'done') { j.state = 'done'; j.el.classList.add('done'); j.say('Inclus în ' + first.outputs[0].name); }
-        else { j.state = 'idle'; j.say(''); }
-      }
-    }
+    if (opts.mergePdf) await runGroup(pending.filter((j) => j.kind === 'image' && j.target === 'pdf'), imagesToPdf, 'Inclus în PDF-ul comun');
+    await runGroup(pending.filter((j) => j.kind === 'pdf' && j.target === 'merge'), pdfMerge, 'Se unește cu primul');
     for (const job of pending) {
       if (job.state === 'done' || job.state === 'busy') continue;
       await runOne(job, () => convert(job, job.target));
       refreshBulk();
     }
-  } finally { running = false; refreshBulk(); }
+  } finally {
+    running = false; refreshBulk();
+    if (ocrWorker && !jobs.some((j) => j.state === 'busy')) { ocrWorker.terminate().catch(() => {}); ocrWorker = null; }
+  }
 }
 
 $('#goBtn').addEventListener('click', runAll);
@@ -821,15 +1194,12 @@ addEventListener('drop', (e) => {
 });
 addEventListener('paste', (e) => {
   const files = [...(e.clipboardData?.files || [])];
-  if (files.length) { addFiles(files.map((f, i) => f.name === 'image.png' ? new File([f], `paste-${Date.now()}-${i}.png`, { type: f.type }) : f)); }
+  if (files.length) addFiles(files.map((f, i) => (f.name === 'image.png' ? new File([f], `paste-${Date.now()}-${i}.png`, { type: f.type }) : f)));
 });
-
-// warm the ffmpeg core in the background when a media file is queued (saves time on first convert)
-// (not done automatically to avoid 30 MB downloads on mobile data)
 
 if ('serviceWorker' in navigator && location.protocol === 'https:') {
   navigator.serviceWorker.register('sw.js').catch(() => {});
 }
 
 // test hook (used for automated checks; harmless otherwise)
-window.__convert = { addFiles, runAll, jobs, setTarget, ff };
+window.__convert = { addFiles, runAll, jobs, setTarget, ff, lib };

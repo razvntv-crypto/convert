@@ -64,6 +64,26 @@
           <select id="optGifFps"><option>10</option><option selected>15</option><option>24</option></select>
         </span>
       </label>
+      <label class="set">
+        <span>Poze: latura maximă</span>
+        <select id="optMaxImg">
+          <option value="0" selected>Original</option>
+          <option value="3840">3840 px (4K)</option>
+          <option value="2560">2560 px</option>
+          <option value="1920">1920 px</option>
+          <option value="1280">1280 px</option>
+          <option value="800">800 px</option>
+        </select>
+      </label>
+      <label class="set">
+        <span>Video: rezoluție maximă</span>
+        <select id="optMaxVid">
+          <option value="0" selected>Originală</option>
+          <option value="1080">1080p</option>
+          <option value="720">720p</option>
+          <option value="480">480p</option>
+        </select>
+      </label>
       <label class="set check">
         <input type="checkbox" id="optForceH264">
         <span>Video: forțează re-encode H.264 <small>(merge peste tot, dar e mai lent)</small></span>
@@ -82,9 +102,15 @@
         <svg viewBox="0 0 48 48" width="44" height="44"><path d="M24 31V11m0 0-7 7m7-7 7 7" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M10 29v6a3 3 0 0 0 3 3h22a3 3 0 0 0 3-3v-6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg>
       </div>
       <p class="drop-title"><span class="desk">Trage fișierele aici sau </span><u>alege fișiere</u></p>
-      <p class="drop-sub">Poze · Video · Audio · PDF · Word · TXT</p>
+      <p class="drop-sub">Poze · Video · Audio · PDF · Word · Excel · TXT</p>
     </div>
   </label>
+
+  <a class="edit-link" href="edit.html">
+    <span class="el-ico" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20"><path d="M4 20h4L19 9l-4-4L4 16v4Z" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"/><path d="m13.5 6.5 4 4" stroke="currentColor" stroke-width="1.9"/></svg></span>
+    <span><b>Editează un PDF</b><small>Modifică text direct, semnătură, pagini, watermark, formulare</small></span>
+    <span class="el-arrow" aria-hidden="true">→</span>
+  </a>
 
   <section class="bulk" id="bulk" hidden>
     <div class="bulk-row">
@@ -115,6 +141,15 @@
       </div>
       <div class="meta"><span class="size"></span><span class="arrow">→</span><span class="target">alege format</span></div>
       <div class="chips targets"></div>
+      <div class="tools" hidden>
+        <button class="tool-toggle" type="button">✂ Taie / sunet</button>
+        <div class="trim" hidden>
+          <label>De la <input class="t-start" placeholder="0:00" autocomplete="off"></label>
+          <label>Până la <input class="t-end" placeholder="final" autocomplete="off"></label>
+          <label class="chk t-mute-wrap"><input type="checkbox" class="t-mute"> Fără sunet</label>
+          <span class="dur"></span>
+        </div>
+      </div>
       <div class="status">
         <div class="bar"><i></i></div>
         <span class="msg"></span>

@@ -90,6 +90,30 @@ h1 { margin: 0; font-size: 22px; font-weight: 700; letter-spacing: -.02em; }
   padding: 6px 10px; border-radius: 9px; border: 1px solid var(--line); background: var(--panel-2); color: var(--text);
 }
 .chip.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.chip.tool { border-style: dashed; }
+.chip.tool.on { border-style: solid; }
+
+/* edit link */
+.edit-link {
+  margin-top: 10px; display: flex; align-items: center; gap: 12px; text-decoration: none; color: var(--text);
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px;
+}
+.edit-link .el-ico { width: 36px; height: 36px; border-radius: 10px; display: grid; place-items: center; background: var(--panel-2); color: var(--accent); flex: none; }
+.edit-link b { display: block; font-weight: 600; }
+.edit-link small { display: block; color: var(--muted); font-size: 12px; }
+.edit-link .el-arrow { margin-left: auto; color: var(--muted); font-size: 18px; }
+
+/* trim tools */
+.tools { display: flex; flex-direction: column; gap: 8px; }
+.tool-toggle { align-self: flex-start; background: none; border: 1px solid var(--line); border-radius: 9px; padding: 5px 10px; font-size: 12px; color: var(--muted); }
+.tool-toggle.on { color: var(--accent); border-color: var(--accent); }
+.trim { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; font-size: 12px; color: var(--muted); }
+.trim label { display: flex; align-items: center; gap: 6px; }
+.trim input:not([type]) , .trim .t-start, .trim .t-end {
+  width: 78px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; font-family: var(--mono); font-size: 13px;
+}
+.trim .chk input { accent-color: var(--accent); width: 16px; height: 16px; margin: 0; }
+.trim .dur { font-family: var(--mono); }
 
 /* queue */
 .queue { list-style: none; margin: 16px 0 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
@@ -155,3 +179,8 @@ h1 { margin: 0; font-size: 22px; font-weight: 700; letter-spacing: -.02em; }
   .bulk-actions .btn { flex: 1; }
   .drop { padding: 28px 16px; }
 }
+.sheet-host { padding: 0; font: 12px/1.35 Arial, sans-serif; }
+.sheet-host h3 { margin: 0 0 8px; font: 600 14px Arial, sans-serif; }
+.sheet-host table { border-collapse: collapse; }
+.sheet-host td, .sheet-host th { border: 1px solid #c8c8c8; padding: 3px 6px; white-space: nowrap; color: #111; }
+.sheet-host tr:first-child td { background: #f1f3f5; font-weight: 600; }
