@@ -283,7 +283,6 @@ function mountItem(it) {
     });
     el.addEventListener('dblclick', () => focusText(it));
     el.addEventListener('keydown', (e) => { if (e.key === 'Escape') el.blur(); e.stopPropagation(); });
-    setEditable(it);
   } else if (it.type === 'image') {
     el.classList.add('it-img'); const img = document.createElement('img'); img.src = it.src; img.alt = ''; el.appendChild(img);
   } else if (it.type === 'rect') {
@@ -299,6 +298,7 @@ function mountItem(it) {
     hs.addEventListener('pointerdown', (e) => { e.stopPropagation(); e.preventDefault(); startResize(it, e); });
   }
   ov.appendChild(el); it.el = el;
+  setEditable(it);
   placeItem(it);
 }
 function setEditable(it) {
