@@ -436,15 +436,15 @@ function buildPlans(info, target, trim) {
     case 'mp4': case 'mov': {
       needVideo();
       const aOk = !info.a || trim.mute || ['aac', 'mp3', 'alac'].includes(info.a);
-      const vOk = !needsScale && (info.v === 'h264' || (info.v === 'hevc' && !opts.forceH264));
+      const vOk = !needsScale && !opts.forceH264 && (info.v === 'h264' || info.v === 'hevc');
       const fast = target === 'mp4' ? ['-movflags', '+faststart'] : [];
       const encode = { ...enc, args: [...mapVA, ...x264(), ...aac(), ...fast] };
       if (vOk) {
         const tag = info.v === 'hevc' ? ['-tag:v', 'hvc1'] : [];
         const audio = trim.mute ? ['-an'] : aOk ? ['-c:a', 'copy'] : aac();
         const copy = { label: 'Schimb containerul (rapid, fără pierderi)…', args: [...mapVA, '-c:v', 'copy', ...tag, ...audio, ...fast] };
-        if (info.v === 'hevc') copy.note = 'Video-ul e HEVC (H.265), l-am păstrat așa. Dacă nu merge pe un PC vechi, bifează „forțează H.264” în setări.';
-        if (trim.start) copy.note = ((copy.note || '') + ' Tăiere rapidă: începutul poate sări la cel mai apropiat cadru-cheie (~1 s).').trim();
+        if (info.v === 'hevc') copy.note = 'Video-ul e HEVC (H.265), l-am păstrat așa. Dacă nu merge pe un PC vechi, bifează „re-encodează mereu” în setări.';
+        if (trim.start) copy.note = ((copy.note || '') + ' Tăiere rapidă: poate începe cu până la ~1 s mai devreme. Pentru tăiere exactă bifează „re-encodează mereu” în setări.').trim();
         return [copy, encode];
       }
       return [encode];
