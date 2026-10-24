@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="ro">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Editează PDF</title>
+<meta name="theme-color" content="#0d0d0f">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="edit.css">
+</head>
+<body>
+<header class="top">
+  <a class="back" href="./" aria-label="Înapoi la Convert">
+    <svg viewBox="0 0 24 24" width="18" height="18"><path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    <span>Convert</span>
+  </a>
+  <span class="fname" id="fname">Editează PDF</span>
+  <div class="top-actions" id="topActions" hidden>
+    <button class="ibtn" id="undoBtn" title="Anulează (Ctrl+Z)" aria-label="Anulează" disabled>
+      <svg viewBox="0 0 24 24" width="18" height="18"><path d="M9 14 4 9l5-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+    </button>
+    <div class="zoom">
+      <button class="ibtn" id="zoomOut" aria-label="Micșorează">−</button>
+      <button class="zval" id="zoomFit" title="Potrivește pe lățime">100%</button>
+      <button class="ibtn" id="zoomIn" aria-label="Mărește">+</button>
+    </div>
+    <button class="btn" id="pagesBtn">Pagini</button>
+    <button class="btn" id="docBtn">Document</button>
+    <button class="btn primary" id="saveBtn">Salvează</button>
+  </div>
+</header>
+
+<nav class="tools" id="tools" hidden>
+  <button class="tool on" data-tool="select" title="Selectează / mută"><svg viewBox="0 0 24 24"><path d="M5 3l14 8-6.5 1.5L9 19z"/></svg><span>Mută</span></button>
+  <button class="tool" data-tool="edit" title="Click pe un text din PDF ca să-l modifici"><svg viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16v4Z"/><path d="m13.5 6.5 4 4"/></svg><span>Editează text</span></button>
+  <button class="tool" data-tool="text" title="Adaugă text nou"><svg viewBox="0 0 24 24"><path d="M5 6V4h14v2M12 4v16M9 20h6"/></svg><span>Text nou</span></button>
+  <button class="tool" data-tool="draw" title="Desenează"><svg viewBox="0 0 24 24"><path d="M3 17c3-1 4-6 7-6s2 5 5 5 3-4 6-5"/></svg><span>Desen</span></button>
+  <button class="tool" data-tool="sign" title="Semnătură"><svg viewBox="0 0 24 24"><path d="M3 19h18M5 15c2-6 4-9 5-8s-2 8 0 8 3-4 4-4 1 3 2 3 2-1 3-2"/></svg><span>Semnătură</span></button>
+  <button class="tool" data-tool="image" title="Adaugă poză"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="m4 18 5-5 4 4 3-3 4 4"/></svg><span>Poză</span></button>
+  <button class="tool" data-tool="whiteout" title="Acoperă o zonă"><svg viewBox="0 0 24 24"><rect x="4" y="7" width="16" height="10" rx="1.5"/><path d="M8 12h8" stroke-dasharray="2 2"/></svg><span>Acoperă</span></button>
+  <button class="tool" data-tool="highlight" title="Marcator"><svg viewBox="0 0 24 24"><path d="M5 19h6M14 4l6 6-8 8H8v-4z"/></svg><span>Marcator</span></button>
+  <button class="tool" data-tool="crop" title="Decupează pagina"><svg viewBox="0 0 24 24"><path d="M7 3v14h14M3 7h14v14"/></svg><span>Decupează</span></button>
+</nav>
+
+<div class="props" id="props" hidden></div>
+<div class="banner" id="banner" hidden></div>
+
+<main class="viewer" id="viewer">
+  <label class="empty" id="empty">
+    <input type="file" id="pdfInput" accept="application/pdf,.pdf">
+    <div class="empty-inner">
+      <svg viewBox="0 0 48 48" width="46" height="46"><path d="M14 6h14l10 10v24a2 2 0 0 1-2 2H14a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2Z" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"/><path d="M28 6v10h10M18 30l10-10 4 4-10 10h-4z" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"/></svg>
+      <p class="e-title"><span class="desk">Trage un PDF aici sau </span><u>alege PDF</u></p>
+      <p class="e-sub">Modifici textul direct, adaugi semnătură, rotești sau ștergi pagini. Totul local.</p>
+    </div>
+  </label>
+  <div class="pages" id="pages"></div>
+</main>
+
+<aside class="sheet" id="pagesSheet" hidden>
+  <div class="sheet-head"><b>Pagini</b><span class="muted" id="pagesCount"></span><button class="ibtn close" data-close aria-label="Închide">×</button></div>
+  <div class="thumbs" id="thumbs"></div>
+</aside>
+
+<aside class="sheet" id="docSheet" hidden>
+  <div class="sheet-head"><b>Document</b><button class="ibtn close" data-close aria-label="Închide">×</button></div>
+  <section class="doc-sec">
+    <label class="row-check"><input type="checkbox" id="numOn"> <b>Numerotare pagini</b></label>
+    <div class="grid2">
+      <label>Poziție
+        <select id="numPos"><option value="bc">Jos centru</option><option value="br">Jos dreapta</option><option value="bl">Jos stânga</option><option value="tc">Sus centru</option><option value="tr">Sus dreapta</option></select>
+      </label>
+      <label>Format
+        <select id="numFmt"><option value="n">1</option><option value="n/N">1 / 10</option><option value="p">Pagina 1 din 10</option></select>
+      </label>
+      <label>Mărime <input type="number" id="numSize" value="10" min="6" max="36"></label>
+      <label>Începe de la pagina <input type="number" id="numFrom" value="1" min="1"></label>
+    </div>
+  </section>
+  <section class="doc-sec">
+    <label class="row-check"><input type="checkbox" id="wmOn"> <b>Watermark</b></label>
+    <div class="grid2">
+      <label class="span2">Text <input type="text" id="wmText" value="CONFIDENȚIAL"></label>
+      <label>Mărime <input type="number" id="wmSize" value="64" min="10" max="200"></label>
+      <label>Opacitate <input type="range" id="wmOpacity" min="5" max="60" value="18"></label>
+      <label>Culoare <input type="color" id="wmColor" value="#d0342c"></label>
+      <label>Unghi
+        <select id="wmAngle"><option value="45">Diagonal</option><option value="0">Orizontal</option></select>
+      </label>
+    </div>
+  </section>
+  <p class="muted small">Numerotarea și watermark-ul se aplică la salvare, pe toate paginile.</p>
+</aside>
+
+<div class="cropbar" id="cropbar" hidden>
+  <span>Trage un dreptunghi pe pagină.</span>
+  <button class="btn" id="cropAll">Aplică pe toate paginile</button>
+  <button class="btn ghost" id="cropClear">Șterge decuparea</button>
+</div>
+
+<dialog class="dlg" id="signDlg">
+  <form method="dialog" class="dlg-inner">
+    <div class="sheet-head"><b>Semnătură</b><button class="ibtn close" value="cancel" aria-label="Închide">×</button></div>
+    <div class="saved-signs" id="savedSigns"></div>
+    <div class="pad-wrap"><canvas id="pad"></canvas><span class="pad-hint">Semnează aici</span></div>
+    <div class="pad-tools">
+      <button type="button" class="swatch on" data-c="#111111" style="--c:#111111" aria-label="Negru"></button>
+      <button type="button" class="swatch" data-c="#1e3fae" style="--c:#1e3fae" aria-label="Albastru"></button>
+      <button type="button" class="btn ghost" id="padClear">Șterge</button>
+      <label class="row-check small"><input type="checkbox" id="padKeep" checked> Ține minte</label>
+      <button type="button" class="btn primary" id="padUse">Pune pe pagină</button>
+    </div>
+  </form>
+</dialog>
+
+<div class="result" id="result" hidden></div>
+<div class="toast" id="toast" hidden></div>
+<input type="file" id="imgInput" accept="image/*" hidden>
+<script type="module" src="edit.js"></script>
+</body>
+</html>
