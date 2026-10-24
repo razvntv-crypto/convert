@@ -108,7 +108,22 @@ h1 { margin: 0; font-size: 22px; font-weight: 700; letter-spacing: -.02em; }
 .tools { display: flex; flex-direction: column; gap: 8px; }
 .tool-toggle { align-self: flex-start; background: none; border: 1px solid var(--line); border-radius: 9px; padding: 5px 10px; font-size: 12px; color: var(--muted); }
 .tool-toggle.on { color: var(--accent); border-color: var(--accent); }
-.trim { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; font-size: 12px; color: var(--muted); }
+.trim { display: flex; flex-direction: column; gap: 10px; font-size: 12px; color: var(--muted); }
+.trim-row { display: flex; flex-wrap: wrap; gap: 8px 10px; align-items: center; }
+.pv-wrap { border-radius: 12px; overflow: hidden; background: #000; max-width: 420px; }
+.pv-wrap:empty, .pv-wrap.off { display: none; }
+.pv { display: block; width: 100%; max-height: 240px; background: #000; }
+.tl { position: relative; height: 34px; max-width: 420px; touch-action: none; }
+.tl-track { position: absolute; left: 11px; right: 11px; top: 14px; height: 6px; border-radius: 3px; background: var(--panel-2); border: 1px solid var(--line); }
+.tl-sel { position: absolute; top: -1px; bottom: -1px; background: var(--accent); border-radius: 3px; }
+.tl-head { position: absolute; top: -5px; width: 2px; height: 16px; background: #fff; border-radius: 1px; margin-left: -1px; pointer-events: none; }
+.tl input[type=range] { position: absolute; inset: 0; width: 100%; margin: 0; background: none; pointer-events: none; -webkit-appearance: none; appearance: none; height: 34px; }
+.tl input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; pointer-events: auto; width: 22px; height: 22px; border-radius: 50%; background: var(--accent); border: 3px solid var(--bg); box-shadow: 0 0 0 1px var(--accent); cursor: grab; }
+.tl input[type=range]::-moz-range-thumb { pointer-events: auto; width: 16px; height: 16px; border-radius: 50%; background: var(--accent); border: 3px solid var(--bg); box-shadow: 0 0 0 1px var(--accent); cursor: grab; }
+.tl input[type=range]::-moz-range-track { background: none; }
+.mini { background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 5px 8px; font-size: 12px; color: var(--text); font-family: var(--mono); }
+.trim select, .trim .t-secs { background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 5px 8px; font-size: 13px; color: var(--text); }
+.trim .t-secs { width: 64px; font-family: var(--mono); }
 .trim label { display: flex; align-items: center; gap: 6px; }
 .trim input:not([type]) , .trim .t-start, .trim .t-end {
   width: 78px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; font-family: var(--mono); font-size: 13px;

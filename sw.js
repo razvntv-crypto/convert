@@ -1,5 +1,5 @@
 // Cache-first service worker: app shell + CDN libraries (incl. ffmpeg core) → works offline after first use.
-const VERSION = 'convert-v3';
+const VERSION = 'convert-v4';
 const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'ffmpeg-worker.js', 'manifest.webmanifest', 'icon.svg', 'icon-180.png', 'icon-512.png', 'edit.html', 'edit.js', 'edit.css'];
 
 self.addEventListener('install', (e) => {

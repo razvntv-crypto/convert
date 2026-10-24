@@ -398,9 +398,14 @@ async function mediaConvert(job, target) {
             if (data.byteLength >= job.file.size) { job.note = 'Nu s-a putut micșora mai mult — e deja comprimat bine.'; return [{ name: job.file.name, blob: job.file }]; }
             notes.push(`−${Math.round((1 - data.byteLength / job.file.size) * 100)}% față de original.`);
           }
+          let outData = data;
+          if (trim.loop) {
+            outData = await loopPass(job, data, outExt, trim, dur);
+            notes.push(trim.loop.mode === 'boom' ? 'Boomerang (înainte + înapoi, fără sunet).' : trim.loop.mode === 'until' ? `Repetat până la ${fmtTime(trim.loop.secs)}.` : `Repetat de ${trim.loop.n} ori.`);
+          }
           job.note = notes.join(' ');
-          const suffix = target === 'small' ? '-mic' : (trim.start != null || trim.end != null) ? '-taiat' : '';
-          return [{ name: `${baseName(job.file.name)}${suffix}.${outExt}`, blob: new Blob([data], { type: MIME[outExt] }) }];
+          const suffix = trim.loop ? (trim.loop.mode === 'boom' ? '-boomerang' : '-loop') : target === 'small' ? '-mic' : (trim.start != null || trim.end != null) ? '-taiat' : '';
+          return [{ name: `${baseName(job.file.name)}${suffix}.${outExt}`, blob: new Blob([outData], { type: MIME[outExt] }) }];
         }
       }
       await ff.unlink(outName).catch(() => {});
@@ -481,7 +486,57 @@ function readTrim(job) {
   const start = parseTime($('.t-start', el)?.value), end = parseTime($('.t-end', el)?.value);
   if (Number.isNaN(start) || Number.isNaN(end)) throw new Error('Timp invalid. Scrie gen 1:30 sau 90.');
   if (start != null && end != null && end <= start) throw new Error('Finalul trebuie să fie după început.');
-  return { start: start || null, end, mute: !!$('.t-mute', el)?.checked };
+  const lv = $('.t-loop', el)?.value || 'off';
+  let loop = null;
+  if (lv === 'boom') loop = { mode: 'boom' };
+  else if (lv === 'until') {
+    const secs = +$('.t-secs', el).value;
+    if (!(secs >= 1)) throw new Error('Scrie câte secunde să aibă loop-ul.');
+    loop = { mode: 'until', secs };
+  } else if (lv !== 'off') loop = { mode: 'times', n: +lv };
+  return { start: start || null, end, mute: !!$('.t-mute', el)?.checked, loop };
+}
+const AUDIO_EXT = ['mp3', 'wav', 'm4a', 'ogg', 'flac'];
+function encodeArgs(ext, mute) {
+  const v = { mp4: ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', String(opts.videoQ), '-pix_fmt', 'yuv420p'],
+    webm: ['-c:v', 'libvpx', '-deadline', 'realtime', '-cpu-used', '8', '-b:v', '2500k', '-crf', '10'], avi: ['-c:v', 'mpeg4', '-q:v', '4'], gif: [] };
+  v.mov = v.mkv = v.mp4;
+  const a = { mp4: ['-c:a', 'aac', '-b:a', '160k'], webm: ['-c:a', 'libvorbis', '-q:a', '5'], avi: ['-c:a', 'libmp3lame', '-q:a', '4'], gif: ['-an'],
+    mp3: ['-c:a', 'libmp3lame', '-q:a', '2'], wav: ['-c:a', 'pcm_s16le'], m4a: ['-c:a', 'aac', '-b:a', '192k'], ogg: ['-c:a', 'libvorbis', '-q:a', '6'], flac: ['-c:a', 'flac'] };
+  a.mov = a.mkv = a.mp4;
+  return { v: v[ext] || [], a: mute ? ['-an'] : a[ext] || [], fast: ext === 'mp4' ? ['-movflags', '+faststart'] : [] };
+}
+async function loopPass(job, data, ext, trim, dur) {
+  const lp = trim.loop, mid = `mid.${ext}`, out = `loop.${ext}`;
+  const total = lp.mode === 'boom' ? dur * 2 : lp.mode === 'until' ? lp.secs : dur * lp.n;
+  const enc = encodeArgs(ext, trim.mute);
+  const tries = [];
+  if (lp.mode === 'boom') {
+    if (AUDIO_EXT.includes(ext)) throw new Error('Boomerang merge doar pe video.');
+    const vf = ext === 'gif'
+      ? '[0:v]split[a][b];[b]reverse[r];[a][r]concat=n=2:v=1:a=0,split[x][y];[x]palettegen=stats_mode=diff[p];[y][p]paletteuse=dither=bayer:bayer_scale=4[v]'
+      : '[0:v]split[a][b];[b]reverse[r];[a][r]concat=n=2:v=1:a=0,scale=trunc(iw/2)*2:trunc(ih/2)*2[v]';
+    tries.push(['-i', mid, '-filter_complex', vf, '-map', '[v]', ...enc.v, ...(ext === 'gif' ? ['-loop', '0'] : []), ...enc.fast]);
+  } else {
+    const pre = lp.mode === 'until' ? ['-stream_loop', '-1'] : ['-stream_loop', String(lp.n - 1)];
+    const post = lp.mode === 'until' ? ['-t', String(lp.secs)] : [];
+    tries.push([...pre, '-i', mid, ...post, '-c', 'copy', ...enc.fast]);
+    tries.push([...pre, '-i', mid, ...post, ...enc.v, ...enc.a, ...enc.fast]);
+  }
+  await ff.write(mid, data);
+  try {
+    for (const args of tries) {
+      job.say(lp.mode === 'boom' ? 'Fac boomerang-ul…' : 'Fac loop-ul…');
+      job.progress(0);
+      const { ret } = await ff.exec(['-hide_banner', '-y', ...args, out], { duration: total, onProgress: (p) => job.progress(p) });
+      if (ret === 0) {
+        const d = await ff.read(out);
+        if (d.byteLength) return d;
+      }
+      await ff.unlink(out).catch(() => {});
+    }
+    throw new Error(lp.mode === 'boom' ? 'Boomerang-ul a eșuat (clipul e prea lung pentru memorie?). Încearcă o bucată mai scurtă.' : 'Loop-ul a eșuat pentru formatul ăsta.');
+  } finally { await ff.unlink(mid).catch(() => {}); await ff.unlink(out).catch(() => {}); }
 }
 
 /* ---------------- PDF pipelines ---------------- */
@@ -1008,7 +1063,8 @@ function mountJob(job) {
     if (job.kind === 'audio') $('.t-mute-wrap', el).remove();
     $('.tool-toggle', el).addEventListener('click', (e) => {
       const tr = $('.trim', el); tr.hidden = !tr.hidden; e.currentTarget.classList.toggle('on', !tr.hidden);
-      if (!tr.hidden && !job.durationProbed) probeDuration(job);
+      if (!tr.hidden && !job.trimReady) setupTrimUI(job);
+      if (tr.hidden) $('.pv', el).pause();
     });
     for (const inp of el.querySelectorAll('.trim input')) inp.addEventListener('input', () => { if (job.state === 'done' || job.state === 'fail') resetJob(job); });
   }
@@ -1018,17 +1074,60 @@ function mountJob(job) {
   setTarget(job, job.target, true);
   queueEl.appendChild(el);
 }
-function probeDuration(job) {
-  job.durationProbed = true;
-  const m = document.createElement(job.kind === 'audio' ? 'audio' : 'video');
-  m.preload = 'metadata';
-  const url = URL.createObjectURL(job.file);
-  m.onloadedmetadata = () => {
-    if (Number.isFinite(m.duration)) { $('.dur', job.el).textContent = `Durată ${fmtTime(Math.round(m.duration * 10) / 10)}`; $('.t-end', job.el).placeholder = fmtTime(Math.floor(m.duration)); }
-    URL.revokeObjectURL(url);
+function setupTrimUI(job) {
+  job.trimReady = true;
+  const el = job.el, v = $('.pv', el), wrap = $('.pv-wrap', el), tl = $('.tl', el), a = $('.tl-a', el), b = $('.tl-b', el);
+  const sel = $('.tl-sel', el), head = $('.tl-head', el), ts = $('.t-start', el), te = $('.t-end', el);
+  if (job.kind === 'audio') { wrap.classList.add('off'); $('.t-loop option[value="boom"]', el)?.remove(); }
+  job.pvUrl = URL.createObjectURL(job.file);
+  v.controls = true; v.src = job.pvUrl;
+  let D = 0;
+  const pvOff = () => { wrap.classList.add('off'); $('.set-a', el).hidden = $('.set-b', el).hidden = true; };
+  if (job.kind === 'audio') pvOff();
+  const round = (t) => Math.round(t * 10) / 10;
+  const changed = () => { if (job.state === 'done' || job.state === 'fail') resetJob(job); };
+  const paint = () => { const A = +a.value / 10, B = +b.value / 10; sel.style.left = A + '%'; sel.style.width = Math.max(0, B - A) + '%'; };
+  const fromInputs = () => {
+    if (!D) return;
+    const s = parseTime(ts.value), e = parseTime(te.value);
+    a.value = Number.isFinite(s) ? Math.round(Math.min(1, s / D) * 1000) : 0;
+    b.value = Number.isFinite(e) ? Math.round(Math.min(1, e / D) * 1000) : 1000;
+    paint();
   };
-  m.onerror = () => URL.revokeObjectURL(url);
-  m.src = url;
+  v.addEventListener('loadedmetadata', () => {
+    if (!Number.isFinite(v.duration) || !v.duration) return;
+    D = v.duration; tl.hidden = false;
+    $('.dur', el).textContent = `Durată ${fmtTime(round(D))}`;
+    te.placeholder = fmtTime(Math.floor(D));
+    if (!v.videoWidth && job.kind === 'video') pvOff(); // codec the browser can't show (e.g. HEVC on some PCs)
+    fromInputs();
+  });
+  v.addEventListener('error', pvOff);
+  v.addEventListener('timeupdate', () => {
+    if (D) head.style.left = (v.currentTime / D) * 100 + '%';
+    const e = parseTime(te.value);
+    if (Number.isFinite(e) && !v.paused && v.currentTime >= e) v.pause();
+  });
+  v.addEventListener('play', () => {
+    const s = parseTime(ts.value) || 0, e = parseTime(te.value);
+    if (v.currentTime < s - 0.05 || (Number.isFinite(e) && v.currentTime >= e - 0.05)) v.currentTime = s;
+  });
+  const onRange = (which) => {
+    if (+a.value > +b.value - 5) { if (which === 'a') a.value = +b.value - 5; else b.value = +a.value + 5; }
+    const s = round((+a.value / 1000) * D), e = round((+b.value / 1000) * D);
+    ts.value = +a.value > 0 ? fmtTime(s) : '';
+    te.value = +b.value < 1000 ? fmtTime(e) : '';
+    paint();
+    if (!wrap.classList.contains('off')) { v.pause(); v.currentTime = which === 'a' ? s : e; }
+    changed();
+  };
+  a.addEventListener('input', () => onRange('a'));
+  b.addEventListener('input', () => onRange('b'));
+  ts.addEventListener('change', fromInputs); te.addEventListener('change', fromInputs);
+  $('.set-a', el).onclick = () => { ts.value = fmtTime(round(v.currentTime)); fromInputs(); changed(); };
+  $('.set-b', el).onclick = () => { te.value = fmtTime(round(v.currentTime)); fromInputs(); changed(); };
+  const loopSel = $('.t-loop', el);
+  loopSel.onchange = () => { $('.t-secs-wrap', el).hidden = loopSel.value !== 'until'; changed(); };
 }
 
 function setTarget(job, t, silent) {
@@ -1050,6 +1149,7 @@ function removeJob(job) {
   const i = jobs.indexOf(job); if (i < 0 || job.state === 'busy') return;
   jobs.splice(i, 1); job.el.remove();
   if (job.thumbUrl) URL.revokeObjectURL(job.thumbUrl);
+  if (job.pvUrl) URL.revokeObjectURL(job.pvUrl);
   for (const o of job.outputs) if (o.url) URL.revokeObjectURL(o.url);
   refreshBulk();
 }

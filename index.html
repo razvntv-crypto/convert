@@ -142,12 +142,36 @@
       <div class="meta"><span class="size"></span><span class="arrow">→</span><span class="target">alege format</span></div>
       <div class="chips targets"></div>
       <div class="tools" hidden>
-        <button class="tool-toggle" type="button">✂ Taie / sunet</button>
+        <button class="tool-toggle" type="button">✂ Taie · Loop · Sunet</button>
         <div class="trim" hidden>
-          <label>De la <input class="t-start" placeholder="0:00" autocomplete="off"></label>
-          <label>Până la <input class="t-end" placeholder="final" autocomplete="off"></label>
-          <label class="chk t-mute-wrap"><input type="checkbox" class="t-mute"> Fără sunet</label>
-          <span class="dur"></span>
+          <div class="pv-wrap"><video class="pv" playsinline muted preload="metadata"></video></div>
+          <div class="tl" hidden>
+            <div class="tl-track"><div class="tl-sel"></div><div class="tl-head"></div></div>
+            <input type="range" class="tl-a" min="0" max="1000" value="0" step="1" aria-label="Început">
+            <input type="range" class="tl-b" min="0" max="1000" value="1000" step="1" aria-label="Final">
+          </div>
+          <div class="trim-row">
+            <label>De la <input class="t-start" placeholder="0:00" autocomplete="off"></label>
+            <button type="button" class="mini set-a" title="Începe de la cadrul curent">⇤ aici</button>
+            <label>Până la <input class="t-end" placeholder="final" autocomplete="off"></label>
+            <button type="button" class="mini set-b" title="Termină la cadrul curent">aici ⇥</button>
+            <span class="dur"></span>
+          </div>
+          <div class="trim-row">
+            <label>Loop
+              <select class="t-loop">
+                <option value="off">fără</option>
+                <option value="2">×2</option>
+                <option value="3">×3</option>
+                <option value="5">×5</option>
+                <option value="10">×10</option>
+                <option value="until">până la… sec</option>
+                <option value="boom" class="vid-only">boomerang ⇄</option>
+              </select>
+            </label>
+            <label class="t-secs-wrap" hidden><input class="t-secs" type="number" min="1" max="3600" value="15" inputmode="numeric"> sec</label>
+            <label class="chk t-mute-wrap"><input type="checkbox" class="t-mute"> Fără sunet</label>
+          </div>
         </div>
       </div>
       <div class="status">
