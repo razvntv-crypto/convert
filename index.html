@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="ro">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Convert</title>
+<meta name="description" content="Convertor local de fișiere: poze, video, audio, PDF, Word. Fără limite, fără upload.">
+<meta name="theme-color" content="#0d0d0f">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Convert">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="app">
+  <header class="top">
+    <div class="brand">
+      <span class="logo" aria-hidden="true">
+        <svg viewBox="0 0 32 32" width="28" height="28"><rect width="32" height="32" rx="9" fill="var(--accent)"/><path d="M9 12h11l-3-3M23 20H12l3 3" stroke="#0d0d0f" stroke-width="2.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </span>
+      <div>
+        <h1>Convert</h1>
+        <p class="tag">Rulează local. Nimic nu pleacă de pe device.</p>
+      </div>
+    </div>
+    <button class="icon-btn" id="settingsBtn" aria-label="Setări" title="Setări">
+      <svg viewBox="0 0 24 24" width="20" height="20"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2.2" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="10" cy="17" r="2.2" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>
+    </button>
+  </header>
+
+  <section class="settings" id="settings" hidden>
+    <div class="set-grid">
+      <label class="set">
+        <span>Calitate JPG / WebP <b id="qVal">90</b></span>
+        <input type="range" id="optQuality" min="40" max="100" value="90">
+      </label>
+      <label class="set">
+        <span>Calitate video</span>
+        <select id="optVideoQ">
+          <option value="20">Mare (fișier mai mare)</option>
+          <option value="23" selected>Normală</option>
+          <option value="28">Mică (fișier mic)</option>
+        </select>
+      </label>
+      <label class="set">
+        <span>Rezoluție PDF → poze</span>
+        <select id="optDpi">
+          <option value="1.5">108 dpi (rapid)</option>
+          <option value="2.5" selected>180 dpi</option>
+          <option value="4.17">300 dpi (print)</option>
+        </select>
+      </label>
+      <label class="set">
+        <span>GIF: lățime / fps</span>
+        <span class="pair">
+          <select id="optGifW"><option value="320">320px</option><option value="480" selected>480px</option><option value="720">720px</option><option value="-1">original</option></select>
+          <select id="optGifFps"><option>10</option><option selected>15</option><option>24</option></select>
+        </span>
+      </label>
+      <label class="set check">
+        <input type="checkbox" id="optForceH264">
+        <span>Video: forțează re-encode H.264 <small>(merge peste tot, dar e mai lent)</small></span>
+      </label>
+      <label class="set check">
+        <input type="checkbox" id="optMergePdf" checked>
+        <span>Mai multe poze → PDF: <small>toate într-un singur PDF</small></span>
+      </label>
+    </div>
+  </section>
+
+  <label class="drop" id="drop">
+    <input type="file" id="fileInput" multiple>
+    <div class="drop-inner">
+      <div class="drop-icon" aria-hidden="true">
+        <svg viewBox="0 0 48 48" width="44" height="44"><path d="M24 31V11m0 0-7 7m7-7 7 7" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M10 29v6a3 3 0 0 0 3 3h22a3 3 0 0 0 3-3v-6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg>
+      </div>
+      <p class="drop-title"><span class="desk">Trage fișierele aici sau </span><u>alege fișiere</u></p>
+      <p class="drop-sub">Poze · Video · Audio · PDF · Word · TXT</p>
+    </div>
+  </label>
+
+  <section class="bulk" id="bulk" hidden>
+    <div class="bulk-row">
+      <span class="bulk-label">Toate în</span>
+      <div class="chips" id="bulkChips"></div>
+    </div>
+    <div class="bulk-actions">
+      <button class="btn ghost" id="clearBtn">Golește</button>
+      <button class="btn ghost" id="zipBtn" hidden>Descarcă tot (.zip)</button>
+      <button class="btn primary" id="goBtn">Convertește tot</button>
+    </div>
+  </section>
+
+  <ul class="queue" id="queue"></ul>
+
+  <footer class="foot">
+    <p>Video &amp; audio cu <span class="mono">ffmpeg.wasm</span> — prima dată descarcă ~30 MB, apoi rămâne în cache. Fișierele foarte mari (peste ~1 GB) pot depăși memoria browserului.</p>
+  </footer>
+</div>
+
+<template id="itemTpl">
+  <li class="item">
+    <div class="thumb"><span class="ext"></span></div>
+    <div class="body">
+      <div class="row1">
+        <span class="name"></span>
+        <button class="x" aria-label="Scoate">×</button>
+      </div>
+      <div class="meta"><span class="size"></span><span class="arrow">→</span><span class="target">alege format</span></div>
+      <div class="chips targets"></div>
+      <div class="status">
+        <div class="bar"><i></i></div>
+        <span class="msg"></span>
+      </div>
+      <div class="outs"></div>
+    </div>
+  </li>
+</template>
+
+<div class="toast" id="toast" hidden></div>
+<script type="module" src="app.js"></script>
+</body>
+</html>
